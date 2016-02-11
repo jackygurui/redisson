@@ -1,15 +1,17 @@
 /**
  * Copyright 2014 Nikita Koksharov, Nickolay Borbit
  *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
- * in compliance with the License. You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.redisson.reactive;
 
@@ -35,152 +37,149 @@ import reactor.rx.subscription.ReactiveSubscription;
 
 public class RedissonKeysReactive implements RKeysReactive {
 
-  private final CommandReactiveService commandExecutor;
+    private final CommandReactiveService commandExecutor;
 
-  RedissonKeys instance;
+    private final RedissonKeys instance;
 
-  public RedissonKeysReactive(CommandReactiveService commandExecutor) {
-    super();
-    instance = new RedissonKeys(commandExecutor);
-    this.commandExecutor = commandExecutor;
-  }
-
-  @Override
-  public Publisher<Integer> getSlot(String key) {
-    return commandExecutor.reactive(instance.getSlotAsync(key));
-  }
-
-  @Override
-  public Publisher<String> getKeysByPattern(final String pattern) {
-    List<Publisher<String>> publishers = new ArrayList<Publisher<String>>();
-    for (ClusterSlotRange slot : commandExecutor.getConnectionManager().getEntries().keySet()) {
-      publishers.add(createKeysIterator(slot.getStartSlot(), pattern));
+    public RedissonKeysReactive(CommandReactiveService commandExecutor) {
+        super();
+        instance = new RedissonKeys(commandExecutor);
+        this.commandExecutor = commandExecutor;
     }
-    return Streams.merge(publishers);
-  }
 
-  @Override
-  public Publisher<String> getKeys() {
-    return getKeysByPattern(null);
-  }
-
-  private Publisher<ListScanResult<String>> scanIterator(int slot, long startPos, String pattern) {
-    if (pattern == null) {
-      return commandExecutor
-          .writeReactive(slot, StringCodec.INSTANCE, RedisCommands.SCAN, startPos);
+    @Override
+    public Publisher<Integer> getSlot(String key) {
+        return commandExecutor.reactive(instance.getSlotAsync(key));
     }
-    return commandExecutor.writeReactive(slot, StringCodec.INSTANCE, RedisCommands.SCAN, startPos,
-        "MATCH", pattern);
-  }
 
-  private Publisher<String> createKeysIterator(final int slot, final String pattern) {
-    return new Stream<String>() {
+    @Override
+    public Publisher<String> getKeysByPattern(final String pattern) {
+        List<Publisher<String>> publishers = new ArrayList<Publisher<String>>();
+        for (ClusterSlotRange slot : commandExecutor.getConnectionManager().getEntries().keySet()) {
+            publishers.add(createKeysIterator(slot.getStartSlot(), pattern));
+        }
+        return Streams.merge(publishers);
+    }
 
-      @Override
-      public void subscribe(final Subscriber<? super String> t) {
-        t.onSubscribe(new ReactiveSubscription<String>(this, t) {
+    @Override
+    public Publisher<String> getKeys() {
+        return getKeysByPattern(null);
+    }
 
-          private List<String> firstValues;
-          private long nextIterPos;
-          private InetSocketAddress client;
+    private Publisher<ListScanResult<String>> scanIterator(int slot, long startPos, String pattern) {
+        if (pattern == null) {
+            return commandExecutor.writeReactive(slot, StringCodec.INSTANCE, RedisCommands.SCAN, startPos);
+        }
+        return commandExecutor.writeReactive(slot, StringCodec.INSTANCE, RedisCommands.SCAN, startPos, "MATCH", pattern);
+    }
 
-          private long currentIndex;
+    private Publisher<String> createKeysIterator(final int slot, final String pattern) {
+        return new Stream<String>() {
 
-          @Override
-          protected void onRequest(final long n) {
-            currentIndex = n;
-            nextValues();
-          }
+            @Override
+            public void subscribe(final Subscriber<? super String> t) {
+                t.onSubscribe(new ReactiveSubscription<String>(this, t) {
 
-          protected void nextValues() {
-            final ReactiveSubscription<String> m = this;
-            scanIterator(slot, nextIterPos, pattern).subscribe(
-                new Subscriber<ListScanResult<String>>() {
+                    private List<String> firstValues;
+                    private long nextIterPos;
+                    private InetSocketAddress client;
 
-                  @Override
-                  public void onSubscribe(Subscription s) {
-                    s.request(Long.MAX_VALUE);
-                  }
+                    private long currentIndex;
 
-                  @Override
-                  public void onNext(ListScanResult<String> res) {
-                    client = res.getRedisClient();
-
-                    long prevIterPos = nextIterPos;
-                    if (nextIterPos == 0 && firstValues == null) {
-                      firstValues = res.getValues();
-                    } else if (res.getValues().equals(firstValues)) {
-                      m.onComplete();
-                      currentIndex = 0;
-                      return;
+                    @Override
+                    protected void onRequest(final long n) {
+                        currentIndex = n;
+                        nextValues();
                     }
 
-                    nextIterPos = res.getPos();
-                    if (prevIterPos == nextIterPos) {
-                      nextIterPos = -1;
-                    }
-                    for (String val : res.getValues()) {
-                      m.onNext(val);
-                      currentIndex--;
-                      if (currentIndex == 0) {
-                        m.onComplete();
-                        return;
-                      }
-                    }
-                    if (nextIterPos == -1) {
-                      m.onComplete();
-                      currentIndex = 0;
-                    }
-                  }
+                    protected void nextValues() {
+                        final ReactiveSubscription<String> m = this;
+                        scanIterator(slot, nextIterPos, pattern).subscribe(new Subscriber<ListScanResult<String>>() {
 
-                  @Override
-                  public void onError(Throwable error) {
-                    m.onError(error);
-                  }
+                            @Override
+                            public void onSubscribe(Subscription s) {
+                                s.request(Long.MAX_VALUE);
+                            }
 
-                  @Override
-                  public void onComplete() {
-                    if (currentIndex == 0) {
-                      return;
+                            @Override
+                            public void onNext(ListScanResult<String> res) {
+                                client = res.getRedisClient();
+
+                                long prevIterPos = nextIterPos;
+                                if (nextIterPos == 0 && firstValues == null) {
+                                    firstValues = res.getValues();
+                                } else if (res.getValues().equals(firstValues)) {
+                                    m.onComplete();
+                                    currentIndex = 0;
+                                    return;
+                                }
+
+                                nextIterPos = res.getPos();
+                                if (prevIterPos == nextIterPos) {
+                                    nextIterPos = -1;
+                                }
+                                for (String val : res.getValues()) {
+                                    m.onNext(val);
+                                    currentIndex--;
+                                    if (currentIndex == 0) {
+                                        m.onComplete();
+                                        return;
+                                    }
+                                }
+                                if (nextIterPos == -1) {
+                                    m.onComplete();
+                                    currentIndex = 0;
+                                }
+                            }
+
+                            @Override
+                            public void onError(Throwable error) {
+                                m.onError(error);
+                            }
+
+                            @Override
+                            public void onComplete() {
+                                if (currentIndex == 0) {
+                                    return;
+                                }
+                                nextValues();
+                            }
+                        });
                     }
-                    nextValues();
-                  }
                 });
-          }
-        });
-      }
+            }
 
-    };
-  }
+        };
+    }
 
-  @Override
-  public Publisher<Collection<String>> findKeysByPattern(String pattern) {
-    return commandExecutor.reactive(instance.findKeysByPatternAsync(pattern));
-  }
+    @Override
+    public Publisher<Collection<String>> findKeysByPattern(String pattern) {
+        return commandExecutor.reactive(instance.findKeysByPatternAsync(pattern));
+    }
 
-  @Override
-  public Publisher<String> randomKey() {
-    return commandExecutor.reactive(instance.randomKeyAsync());
-  }
+    @Override
+    public Publisher<String> randomKey() {
+        return commandExecutor.reactive(instance.randomKeyAsync());
+    }
 
-  @Override
-  public Publisher<Long> deleteByPattern(String pattern) {
-    return commandExecutor.reactive(instance.deleteByPatternAsync(pattern));
-  }
+    @Override
+    public Publisher<Long> deleteByPattern(String pattern) {
+        return commandExecutor.reactive(instance.deleteByPatternAsync(pattern));
+    }
 
-  @Override
-  public Publisher<Long> delete(String... keys) {
-    return commandExecutor.reactive(instance.deleteAsync(keys));
-  }
+    @Override
+    public Publisher<Long> delete(String ... keys) {
+        return commandExecutor.reactive(instance.deleteAsync(keys));
+    }
 
-  @Override
-  public Publisher<Void> flushdb() {
-    return commandExecutor.reactive(instance.flushdbAsync());
-  }
+    @Override
+    public Publisher<Void> flushdb() {
+        return commandExecutor.reactive(instance.flushdbAsync());
+    }
 
-  @Override
-  public Publisher<Void> flushall() {
-    return commandExecutor.reactive(instance.flushallAsync());
-  }
+    @Override
+    public Publisher<Void> flushall() {
+        return commandExecutor.reactive(instance.flushallAsync());
+    }
 
 }
