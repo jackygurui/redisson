@@ -30,6 +30,7 @@ import org.redisson.client.RedisConnection;
 import org.redisson.client.RedisLoadingException;
 import org.redisson.client.RedisMovedException;
 import org.redisson.client.RedisTimeoutException;
+import org.redisson.client.RedisTryAgainException;
 import org.redisson.client.WriteRedisConnectionException;
 import org.redisson.client.codec.Codec;
 import org.redisson.client.codec.StringCodec;
@@ -167,7 +168,7 @@ public class CommandBatchService extends CommandReactiveService {
             @Override
             public void operationComplete(Future<Void> future) throws Exception {
                 if (!future.isSuccess()) {
-                    promise.setFailure(future.cause());
+                    promise.tryFailure(future.cause());
                     commands = null;
                     return;
                 }
@@ -188,7 +189,7 @@ public class CommandBatchService extends CommandReactiveService {
                         result.add(entryResult);
                     }
                 }
-                promise.setSuccess(result);
+                promise.trySuccess(result);
                 commands = null;
             }
         });
@@ -206,7 +207,7 @@ public class CommandBatchService extends CommandReactiveService {
         }
 
         if (!connectionManager.getShutdownLatch().acquire()) {
-            mainPromise.setFailure(new IllegalStateException("Redisson is shutdown"));
+            mainPromise.tryFailure(new IllegalStateException("Redisson is shutdown"));
             return;
         }
 
@@ -299,13 +300,24 @@ public class CommandBatchService extends CommandReactiveService {
                     execute(entry, source, mainPromise, slots, attempt);
                     return;
                 }
+                if (future.cause() instanceof RedisTryAgainException) {
+                    entry.clearErrors();
+                    connectionManager.newTimeout(new TimerTask() {
+                        @Override
+                        public void run(Timeout timeout) throws Exception {
+                            execute(entry, source, mainPromise, slots, attempt);
+                        }
+                    }, 1, TimeUnit.SECONDS);
+                    return;
+                }
+
 
                 if (future.isSuccess()) {
                     if (slots.decrementAndGet() == 0) {
-                        mainPromise.setSuccess(future.getNow());
+                        mainPromise.trySuccess(future.getNow());
                     }
                 } else {
-                    mainPromise.setFailure(future.cause());
+                    mainPromise.tryFailure(future.cause());
                 }
             }
         });

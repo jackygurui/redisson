@@ -139,13 +139,15 @@ public class RedisClient {
                     final RedisConnection c = new RedisConnection(RedisClient.this, future.channel());
                     bootstrap.group().execute(new Runnable() {
                         public void run() {
-                            f.setSuccess(c);
+                            if (!f.trySuccess(c)) {
+                                c.closeAsync();
+                            }
                         }
                     });
                 } else {
                     bootstrap.group().execute(new Runnable() {
                         public void run() {
-                            f.setFailure(future.cause());
+                            f.tryFailure(future.cause());
                         }
                     });
                 }
@@ -174,13 +176,15 @@ public class RedisClient {
                     final RedisPubSubConnection c = new RedisPubSubConnection(RedisClient.this, future.channel());
                     bootstrap.group().execute(new Runnable() {
                         public void run() {
-                            f.setSuccess(c);
+                            if (!f.trySuccess(c)) {
+                                c.closeAsync();
+                            }
                         }
                     });
                 } else {
                     bootstrap.group().execute(new Runnable() {
                         public void run() {
-                            f.setFailure(future.cause());
+                            f.tryFailure(future.cause());
                         }
                     });
                 }
@@ -199,7 +203,10 @@ public class RedisClient {
 
     public ChannelGroupFuture shutdownAsync() {
         for (Channel channel : channels) {
-            RedisConnection.getFrom(channel).setClosed(true);
+            RedisConnection connection = RedisConnection.getFrom(channel);
+            if (connection != null) {
+                connection.setClosed(true);
+            }
         }
         return channels.close();
     }

@@ -38,7 +38,7 @@ import io.netty.util.concurrent.FutureListener;
 
 /**
  * Distributed and concurrent implementation of {@link java.util.concurrent.Semaphore}.
- * <p/>
+ * <p>
  * Works in non-fair mode. Therefore order of acquiring is unpredictable.
  *
  * @author Nikita Koksharov
@@ -107,12 +107,14 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
             @Override
             public void operationComplete(Future<Boolean> future) throws Exception {
                 if (!future.isSuccess()) {
-                    result.setFailure(future.cause());
+                    result.tryFailure(future.cause());
                     return;
                 }
 
                 if (future.getNow()) {
-                    result.setSuccess(null);
+                    if (!result.trySuccess(null)) {
+                        releaseAsync(permits);
+                    }
                     return;
                 }
                 
@@ -121,7 +123,7 @@ public class RedissonSemaphore extends RedissonExpirable implements RSemaphore {
                     @Override
                     public void operationComplete(Future<RedissonLockEntry> future) throws Exception {
                         if (!future.isSuccess()) {
-                            result.setFailure(future.cause());
+                            result.tryFailure(future.cause());
                             return;
                         }
 
